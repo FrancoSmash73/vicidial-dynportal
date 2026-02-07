@@ -1,0 +1,95 @@
+#!/bin/bash
+###############################################################################
+# VB-firewall - Sync ViciWhite IP list from DB to firewalld ipset
+#
+# Usage:
+#   VB-firewall --white --dynamic [--quiet]
+#
+# Reads IPs from vicidial_ip_list_entries (list_id=ViciWhite),
+# syncs them into the 'dynamiclist' ipset managed by firewalld.
+# Removes IPs from ipset that are no longer in DB.
+###############################################################################
+
+CONF="/etc/astguiclient.conf"
+IPSET_NAME="dynamiclist"
+IP_LIST_ID="ViciWhite"
+QUIET=0
+
+# Parse flags
+WHITE=0
+DYNAMIC=0
+for arg in "$@"; do
+    case "$arg" in
+        --white)   WHITE=1 ;;
+        --dynamic) DYNAMIC=1 ;;
+        --quiet)   QUIET=1 ;;
+        --help|-h)
+            echo "Usage: VB-firewall --white --dynamic [--quiet]"
+            echo "Syncs ViciWhite DB entries to dynamiclist ipset"
+            exit 0
+            ;;
+    esac
+done
+
+if [[ $WHITE -ne 1 || $DYNAMIC -ne 1 ]]; then
+    echo "Usage: VB-firewall --white --dynamic [--quiet]"
+    exit 1
+fi
+
+log() {
+    [[ $QUIET -eq 1 ]] && return
+    echo "$(date '+%Y-%m-%d %H:%M:%S') VB-firewall: $*"
+}
+
+# Read DB credentials from astguiclient.conf
+get_conf() {
+    grep "^${1} " "$CONF" 2>/dev/null | sed "s/^${1} => //"
+}
+
+DB_HOST=$(get_conf VARDB_server)
+DB_NAME=$(get_conf VARDB_database)
+DB_USER=$(get_conf VARDB_user)
+DB_PASS=$(get_conf VARDB_pass)
+DB_PORT=$(get_conf VARDB_port)
+
+if [[ -z "$DB_HOST" || -z "$DB_USER" || -z "$DB_PASS" ]]; then
+    echo "ERROR: Cannot read DB credentials from $CONF" >&2
+    exit 1
+fi
+
+# Ensure the ipset exists in firewalld (create at runtime if needed)
+if ! firewall-cmd --get-ipsets 2>/dev/null | grep -qw "$IPSET_NAME"; then
+    log "Creating ipset $IPSET_NAME in firewalld"
+    firewall-cmd --permanent --new-ipset="$IPSET_NAME" --type=hash:ip 2>/dev/null || true
+    firewall-cmd --reload 2>/dev/null
+fi
+
+# Get IPs from database
+DB_IPS=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
+    -N -B -e "SELECT ip_address FROM vicidial_ip_list_entries WHERE ip_list_id='${IP_LIST_ID}';" 2>/dev/null | sort -u)
+
+# Get current IPs in ipset
+CURRENT_IPS=$(firewall-cmd --ipset="$IPSET_NAME" --get-entries 2>/dev/null | sort -u)
+
+# Add IPs that are in DB but not in ipset
+while IFS= read -r ip; do
+    [[ -z "$ip" ]] && continue
+    if ! echo "$CURRENT_IPS" | grep -qxF "$ip"; then
+        log "Adding $ip to $IPSET_NAME"
+        firewall-cmd --ipset="$IPSET_NAME" --add-entry="$ip" 2>/dev/null
+    fi
+done <<< "$DB_IPS"
+
+# Remove IPs that are in ipset but not in DB
+while IFS= read -r ip; do
+    [[ -z "$ip" ]] && continue
+    if ! echo "$DB_IPS" | grep -qxF "$ip"; then
+        log "Removing $ip from $IPSET_NAME"
+        firewall-cmd --ipset="$IPSET_NAME" --remove-entry="$ip" 2>/dev/null
+    fi
+done <<< "$CURRENT_IPS"
+
+# Save to permanent config
+firewall-cmd --runtime-to-permanent 2>/dev/null
+
+log "Sync complete. IPs in $IPSET_NAME: $(firewall-cmd --ipset="$IPSET_NAME" --get-entries 2>/dev/null | wc -w)"
