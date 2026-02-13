@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>ViciPortal SSL</short>
+  <description>HTTPS portal for ViciDial agent IP self-service whitelisting (port 446)</description>
+  <port protocol="tcp" port="446"/>
+</service>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>Asterisk</short>
+  <description>Asterisk PBX - SIP, IAX2, WebSocket, and HTTP provisioning</description>
+  <port protocol="udp" port="5060"/>
+  <port protocol="tcp" port="5060"/>
+  <port protocol="tcp" port="5061"/>
+  <port protocol="udp" port="4569"/>
+  <port protocol="tcp" port="8088"/>
+  <port protocol="tcp" port="8089"/>
+</service>

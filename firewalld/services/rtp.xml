@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<service>
+  <short>RTP</short>
+  <description>Real-time Transport Protocol media streams (UDP 10000-20000)</description>
+  <port protocol="udp" port="10000-20000"/>
+</service>
