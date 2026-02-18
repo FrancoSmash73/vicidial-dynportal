@@ -2,5 +2,5 @@
 <service>
   <short>RTP</short>
   <description>Real-time Transport Protocol media streams (UDP 10000-20000)</description>
-  <port protocol="udp" port="10000-20000"/>
+  <port protocol="udp" port="9000-35000"/>
 </service>
