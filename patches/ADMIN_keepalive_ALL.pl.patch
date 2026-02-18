@@ -1,0 +1,10 @@
+--- a/ADMIN_keepalive_ALL.pl
++++ b/ADMIN_keepalive_ALL.pl
+@@ -1083,7 +1083,8 @@
+ 			{
+ 			if ($DB) {print "starting FastAGI_log...\n";}
+ 			# add a '-L' to the command below to activate logging
+-			`/usr/bin/screen -d -m -S ASTfastlog $PATHhome/FastAGI_log.pl --debug $debug_string`;
++			# wrap in bash so Net::Server::PreFork is not attached to screen's PTY
++			`/usr/bin/screen -d -m -S ASTfastlog /bin/bash -c '$PATHhome/FastAGI_log.pl --debug $debug_string > /dev/null 2>&1'`;
+ 			if ($megaDB)

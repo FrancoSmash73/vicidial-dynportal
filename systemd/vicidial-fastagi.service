@@ -1,0 +1,20 @@
+[Unit]
+Description=ViciDial FastAGI Log Server (port 4577)
+Documentation=file:///usr/share/astguiclient/FastAGI_log.pl
+After=network.target mariadb.service asterisk.service
+Wants=mariadb.service asterisk.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/share/astguiclient/FastAGI_log.pl --debug
+Restart=always
+RestartSec=10
+# Stdout goes to the standard ViciDial FASTagiout log via the script's own file handle.
+# Stderr captured here for crash diagnostics.
+StandardOutput=null
+StandardError=append:/var/log/astguiclient/fastagi-stderr.log
+
+[Install]
+WantedBy=multi-user.target
