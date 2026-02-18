@@ -67,8 +67,7 @@ fi
 
 # Get IPs from database
 DB_IPS=$(mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" \
-    -N -B -e "SELECT ip_address FROM vicidial_ip_list_entries WHERE ip_list_id='${IP_LIST_ID}';" 2>/dev/null | sort -u)
-
+    -N -B -e "SELECT ip_address FROM vicidial_ip_list_entries WHERE ip_list_id='${IP_LIST_ID}' AND entry_date >= NOW() - INTERVAL 14 DAY;" 2>/dev/null | sort -u)
 # Get current IPs in ipset
 CURRENT_IPS=$(firewall-cmd --ipset="$IPSET_NAME" --get-entries 2>/dev/null | sort -u)
 
