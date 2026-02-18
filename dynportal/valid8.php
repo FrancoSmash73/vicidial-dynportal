@@ -65,9 +65,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
             mysqli_stmt_close($stmt);
 
             if (!$exists) {
-                // Insert the IP
+                // Insert the IP with explicit timestamp so VB-firewall's 14-day window sees it
                 $stmt = mysqli_prepare($link,
-                    "INSERT INTO vicidial_ip_list_entries (ip_list_id, ip_address) VALUES (?, ?)"
+                    "INSERT INTO vicidial_ip_list_entries (ip_list_id, ip_address, entry_date) VALUES (?, ?, NOW())"
+                );
+                mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
+                mysqli_stmt_execute($stmt);
+                mysqli_stmt_close($stmt);
+            } else {
+                // Refresh entry_date so the 14-day expiry resets on each login
+                $stmt = mysqli_prepare($link,
+                    "UPDATE vicidial_ip_list_entries SET entry_date = NOW() WHERE ip_list_id = ? AND ip_address = ?"
                 );
                 mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
                 mysqli_stmt_execute($stmt);

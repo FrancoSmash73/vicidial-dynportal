@@ -19,25 +19,35 @@ set -euo pipefail
 
 DOMAIN=""
 CERT_DIR=""
+CARRIER_IP=""
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
-    echo "Usage: $0 --domain <your.domain.com>"
+    echo "Usage: $0 --domain <your.domain.com> [--carrier-ip <ip>]"
+    echo "  --carrier-ip   Permanently whitelist a SIP carrier IP (e.g. 88.151.128.22)"
     exit 1
 }
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --domain) DOMAIN="$2"; shift 2 ;;
+        --domain)     DOMAIN="$2";     shift 2 ;;
+        --carrier-ip) CARRIER_IP="$2"; shift 2 ;;
         -h|--help) usage ;;
         *) die "Unknown option: $1" ;;
     esac
 done
 
 [[ -n "$DOMAIN" ]] || die "Missing required --domain argument. Run with --help for usage."
+
+# Validate carrier IP if provided
+if [[ -n "$CARRIER_IP" ]]; then
+    if ! [[ "$CARRIER_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        die "Invalid --carrier-ip address: $CARRIER_IP"
+    fi
+fi
 CERT_DIR="/etc/letsencrypt/live/${DOMAIN}"
 
 [[ $EUID -eq 0 ]] || die "Run as root"
@@ -113,11 +123,13 @@ chmod +x /usr/bin/VB-firewall
 # 6. Database setup
 echo "Creating ViciWhite IP list in database..."
 CONF="/etc/astguiclient.conf"
-DB_HOST=$(grep "^VARDB_server " "$CONF" | sed "s/^VARDB_server => //")
-DB_NAME=$(grep "^VARDB_database " "$CONF" | sed "s/^VARDB_database => //")
-DB_USER=$(grep "^VARDB_user " "$CONF" | sed "s/^VARDB_user => //")
-DB_PASS=$(grep "^VARDB_pass " "$CONF" | sed "s/^VARDB_pass => //")
-DB_PORT=$(grep "^VARDB_port " "$CONF" | sed "s/^VARDB_port => //")
+# Read and strip leading/trailing whitespace from each value
+get_conf() { grep "^${1} " "$CONF" 2>/dev/null | sed "s/^${1} => //;s/[[:space:]]*$//"; }
+DB_HOST=$(get_conf VARDB_server)
+DB_NAME=$(get_conf VARDB_database)
+DB_USER=$(get_conf VARDB_user)
+DB_PASS=$(get_conf VARDB_pass)
+DB_PORT=$(get_conf VARDB_port)
 
 mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
   "INSERT IGNORE INTO vicidial_ip_lists (ip_list_id, ip_list_name, active, user_group) VALUES ('ViciWhite', 'Dynamic Agent Whitelist', 'Y', '---ALL---');" 2>/dev/null
@@ -127,6 +139,14 @@ echo "Applying firewall rules..."
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" service name="viciportal-ssl" accept' 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source ipset="dynamiclist" service name="asterisk" accept' 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source ipset="dynamiclist" service name="rtp" accept' 2>/dev/null || true
+
+# Permanently whitelist carrier IP for SIP trunk (if provided)
+if [[ -n "$CARRIER_IP" ]]; then
+    echo "Whitelisting carrier IP ${CARRIER_IP} for SIP/RTP..."
+    firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${CARRIER_IP}\" service name=\"asterisk\" accept" 2>/dev/null || true
+    firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${CARRIER_IP}\" service name=\"rtp\" accept" 2>/dev/null || true
+fi
+
 firewall-cmd --reload
 
 # 8. Restart Apache
@@ -155,3 +175,4 @@ echo ""
 echo "=== Installation complete ==="
 echo "Portal URL: https://${DOMAIN}:446/valid8.php"
 echo "Cron: VB-firewall runs every minute to sync IPs"
+[[ -n "$CARRIER_IP" ]] && echo "Carrier IP ${CARRIER_IP} permanently whitelisted for SIP/RTP"
