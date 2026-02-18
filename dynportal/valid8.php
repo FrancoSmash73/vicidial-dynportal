@@ -65,21 +65,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
             mysqli_stmt_close($stmt);
 
             if (!$exists) {
-                // Insert the IP with explicit timestamp so VB-firewall's 14-day window sees it
+                // Insert the IP with explicit timestamp (audit trail)
                 $stmt = mysqli_prepare($link,
                     "INSERT INTO vicidial_ip_list_entries (ip_list_id, ip_address, entry_date) VALUES (?, ?, NOW())"
                 );
-                mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
-                mysqli_stmt_execute($stmt);
-                mysqli_stmt_close($stmt);
+                if ($stmt) {
+                    mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
+                    mysqli_stmt_execute($stmt);
+                    mysqli_stmt_close($stmt);
+                }
             } else {
-                // Refresh entry_date so the 14-day expiry resets on each login
+                // Refresh entry_date on each login (audit trail)
                 $stmt = mysqli_prepare($link,
                     "UPDATE vicidial_ip_list_entries SET entry_date = NOW() WHERE ip_list_id = ? AND ip_address = ?"
                 );
-                mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
-                mysqli_stmt_execute($stmt);
-                mysqli_stmt_close($stmt);
+                if ($stmt) {
+                    mysqli_stmt_bind_param($stmt, 'ss', $ip_list_id, $client_ip);
+                    mysqli_stmt_execute($stmt);
+                    mysqli_stmt_close($stmt);
+                }
             }
 
             $success = "IP $client_ip whitelisted successfully. Access will be granted within 60 seconds.";

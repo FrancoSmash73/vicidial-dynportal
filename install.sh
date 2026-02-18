@@ -134,6 +134,10 @@ DB_PORT=$(get_conf VARDB_port)
 mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
   "INSERT IGNORE INTO vicidial_ip_lists (ip_list_id, ip_list_name, active, user_group) VALUES ('ViciWhite', 'Dynamic Agent Whitelist', 'Y', '---ALL---');" 2>/dev/null
 
+# Add entry_date column if it doesn't exist (idempotent)
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
+  "ALTER TABLE vicidial_ip_list_entries ADD COLUMN IF NOT EXISTS entry_date DATETIME NULL DEFAULT NULL;" 2>/dev/null
+
 # 7. Firewall rules (permanent + reload)
 echo "Applying firewall rules..."
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" service name="viciportal-ssl" accept' 2>/dev/null || true
