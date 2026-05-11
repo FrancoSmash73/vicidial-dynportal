@@ -1,368 +1,183 @@
-# 📋 ViciDial Dynamic Portal — Step-by-Step Installation Guide
+# 📋 ViciDial Dynamic Portal — Installation Guide
 
-> **Target OS:** CentOS 7/8 · Rocky Linux 8/9 · AlmaLinux 8/9  
-> **Web Server:** Apache httpd  
-> **Firewall:** `firewalld`  
-> **Estimated Time:** 20–30 minutes
-
----
-
-## Table of Contents
-
-1. [Prerequisites](#1-prerequisites)
-2. [Clone the Repository](#2-clone-the-repository)
-3. [Run the Installer](#3-run-the-installer)
-4. [Configure the Portal](#4-configure-the-portal)
-5. [Configure Apache (httpd)](#5-configure-apache-httpd)
-6. [Configure Firewalld](#6-configure-firewalld)
-7. [Set Up SSL (HTTPS) — Recommended](#7-set-up-ssl-https--recommended)
-8. [Set Up the Cron Job](#8-set-up-the-cron-job)
-9. [Restart Services](#9-restart-services)
-10. [Test the Portal](#10-test-the-portal)
-11. [Agent Usage Instructions](#11-agent-usage-instructions)
-12. [Troubleshooting](#12-troubleshooting)
+> **Target OS:** Rocky Linux 8/9/10, CentOS 7/8, AlmaLinux 8/9  
+> **Web Server:** Apache httpd 2.4+  
+> **Firewall:** firewalld with `dynamiclist` ipset (standard VICIdial setup)  
+> **Estimated Time:** 15 minutes
 
 ---
 
-## 1. Prerequisites
+## Prerequisites
 
-Before starting, make sure the following are in place on your ViciDial server:
+- VICIdial fully installed and running
+- Apache (`httpd`) installed and running
+- PHP 7.2+ with `mysqli` extension
+- Valid TLS certificate for your server's hostname (Let's Encrypt recommended)
+- `firewalld` active with the `dynamiclist` ipset (standard on VICIdial servers)
+- A `ViciWhite` IP list created in ViciDial Admin → Admin → IP Lists
 
 ```bash
-# Verify Apache is installed and running
-systemctl status httpd
-
-# Verify firewalld is installed and running
-systemctl status firewalld
-
-# Verify PHP is installed (7.2+ required)
-php -v
-
-# Verify PHP mysqli module is loaded
+# Verify requirements
+systemctl is-active httpd
 php -m | grep mysqli
-```
-
-If any are missing, install them:
-
-```bash
-# Install Apache and PHP (Rocky/AlmaLinux 8+)
-dnf install -y httpd php php-mysqli php-curl
-
-# Install and enable firewalld
-dnf install -y firewalld
-systemctl enable --now firewalld
-
-# Start and enable Apache
-systemctl enable --now httpd
+firewall-cmd --get-ipsets | grep dynamiclist
 ```
 
 ---
 
-## 2. Clone the Repository
+## Step 1 — Clone into web root
 
 ```bash
-# Navigate to a working directory
-cd /opt
+cd /var/www/html
+git clone https://github.com/FrancoSmash73/vicidial-dynportal.git dynportal
 
-# Clone the repo
-git clone https://github.com/FrancoSmash73/vicidial-dynportal.git
-
-# Enter the project directory
-cd vicidial-dynportal
+chmod -R 755 /var/www/html/dynportal
+chown -R apache:apache /var/www/html/dynportal
 ```
-
-> **No git?** Install it first: `dnf install -y git`
 
 ---
 
-## 3. Run the Installer
-
-The included `install.sh` script handles the bulk of the setup automatically.
+## Step 2 — Configure the portal
 
 ```bash
-# Make the installer executable
-chmod +x install.sh
-
-# Run as root
-sudo ./install.sh
-```
-
-The installer will:
-- Copy the portal files to the web root (`/var/www/html/dynportal`)
-- Deploy the Apache virtual host config from `httpd/`
-- Apply `firewalld` zone and ipset configs from `firewalld/`
-- Set correct file permissions on the portal files
-
-> ⚠️ **If prompted to overwrite existing firewalld zone files (e.g. `public.xml`), type `yes`.**
-
----
-
-## 4. Configure the Portal
-
-After installation, edit the portal's configuration file to point it to your ViciDial database.
-
-```bash
-# Open the main config file
 vi /var/www/html/dynportal/inc/defaults.inc.php
 ```
 
-Update the following values:
-
 ```php
-// --- Database Connection ---
-$PORTAL_dbhost   = 'localhost';       // Your ViciDial DB host
-$PORTAL_dbuser   = 'cron';           // ViciDial DB user (usually 'cron')
-$PORTAL_dbpass   = 'your_password';  // ViciDial DB password
-$PORTAL_dbname   = 'asterisk';       // ViciDial database name
+<?php
+// IP list ID in vicidial_ip_list_entries (must match a list in ViciDial Admin)
+$ip_list_id = 'ViciWhite';
 
-// --- Portal Behavior ---
-$PORTAL_userlevel     = 1;   // Minimum ViciDial user level allowed (1 = agents)
-$PORTAL_secure        = 1;   // 1 = require HTTPS, 0 = allow HTTP
-$PORTAL_casesensitive = 0;   // 1 = case-sensitive login, 0 = case-insensitive
-$PORTAL_loginfails    = 5;   // Max failed login attempts before lockout
+// Minimum ViciDial user level to use portal (1 = all active agents)
+$min_user_level = 1;
+
+// Redirect after successful login
+$redirect_agent = 'https://YOUR_SERVER_HOSTNAME/agc/vicidial.php';
+$redirect_admin = 'https://YOUR_SERVER_HOSTNAME/vicidial/welcome.php';
+
+// user_level >= this value gets the admin redirect
+$admin_level = 9;
+
+// Page title shown in browser tab
+$portal_title = 'ViciDial Agent Portal';
 ```
 
-> 💡 Your ViciDial DB credentials can be found in `/etc/astguiclient.conf` on the ViciDial server.
+> **No DB credentials needed.** `dbconnect.inc.php` auto-reads them from `/etc/astguiclient.conf`.
 
 ---
 
-## 5. Configure Apache (httpd)
+## Step 3 — Apache virtual host
 
-The portal runs on a separate port from your main ViciDial interface:
-
-| Mode  | Port |
-|-------|------|
-| HTTP  | 81   |
-| HTTPS | 446  |
-
-### 5a. Add the Listen Ports
-
-```bash
-vi /etc/httpd/conf/httpd.conf
-```
-
-Make sure these lines are present:
+Create `/etc/httpd/conf.d/dynportal-ssl.conf`:
 
 ```apache
-Listen 80
-Listen 81
-```
+Listen 446 https
 
-For HTTPS, also edit your SSL config:
-
-```bash
-vi /etc/httpd/conf.d/ssl.conf
-```
-
-Add after `Listen 443`:
-
-```apache
-Listen 446
-```
-
-### 5b. Verify the Virtual Host Config
-
-The installer should have placed this file automatically. Verify it:
-
-```bash
-cat /etc/httpd/conf.d/dynportal.conf
-```
-
-It should look like this (HTTP version):
-
-```apache
-<VirtualHost *:81>
-    ServerName your-server-hostname.com
-    DocumentRoot /var/www/html/dynportal
-    ErrorLog /var/log/httpd/dynportal-error.log
-    CustomLog /dev/null combined
-
-    DirectoryIndex index.html index.php
-
-    <Files ~ "^\.ht">
-        Require all denied
-    </Files>
-    <Files ~ "^\debug.txt">
-        Require all denied
-    </Files>
-    <Directory "/var/www/html/dynportal/inc">
-        Require all denied
-    </Directory>
-    <Directory "/var/www/html/dynportal">
-        Options FollowSymLinks
-        AllowOverride None
-        Require all granted
-    </Directory>
-</VirtualHost>
-```
-
----
-
-## 6. Configure Firewalld
-
-### 6a. Open the Portal Ports
-
-```bash
-# Allow the portal ports through the firewall
-sudo firewall-cmd --permanent --add-port=81/tcp
-sudo firewall-cmd --permanent --add-port=446/tcp
-
-# Reload firewall to apply
-sudo firewall-cmd --reload
-```
-
-### 6b. Verify Zones and IPSets
-
-The installer copies zone and ipset configs from the `firewalld/` folder. Confirm they're in place:
-
-```bash
-# List available zones
-sudo firewall-cmd --list-all-zones | grep -A5 "vicidial"
-
-# List custom ipsets
-sudo firewall-cmd --get-ipsets
-```
-
----
-
-## 7. Set Up SSL (HTTPS) — Recommended
-
-Running the portal over HTTPS is **strongly recommended** since agents submit their credentials through it.
-
-### Option A: Let's Encrypt (Certbot)
-
-```bash
-# Install certbot
-dnf install -y certbot python3-certbot-apache
-
-# Obtain a certificate for your domain
-certbot --apache -d your-server-hostname.com
-```
-
-### Option B: Manual SSL Certificate
-
-Edit the SSL virtual host config:
-
-```bash
-vi /etc/httpd/conf.d/dynportal-ssl.conf
-```
-
-Update the certificate paths:
-
-```apache
-<VirtualHost *:446>
-    ServerName your-server-hostname.com
+<VirtualHost _default_:446>
+    ServerName YOUR_SERVER_HOSTNAME:446
     DocumentRoot /var/www/html/dynportal
 
     SSLEngine on
-    SSLCertificateFile     /etc/letsencrypt/live/your-domain.com/cert.pem
-    SSLCACertificateFile   /etc/letsencrypt/live/your-domain.com/fullchain.pem
-    SSLCertificateKeyFile  /etc/letsencrypt/live/your-domain.com/privkey.pem
+    SSLCertificateFile    /etc/letsencrypt/live/YOUR_DOMAIN/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/YOUR_DOMAIN/privkey.pem
+
+    SSLProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1
+    SSLHonorCipherOrder on
+
+    <Directory /var/www/html/dynportal>
+        AllowOverride None
+        Require all granted
+        DirectoryIndex valid8.php
+    </Directory>
+
+    <Directory /var/www/html/dynportal/inc>
+        Require all denied
+    </Directory>
+
+    ErrorLog  logs/dynportal_ssl_error_log
+    TransferLog logs/dynportal_ssl_access_log
+    LogLevel warn
+</VirtualHost>
+
+# HTTP on port 81 → redirect to HTTPS:446
+Listen 81
+
+<VirtualHost _default_:81>
+    ServerName YOUR_SERVER_HOSTNAME
+    RewriteEngine On
+    RewriteRule ^/?(.*) https://YOUR_SERVER_HOSTNAME:446/$1 [R=301,L]
 </VirtualHost>
 ```
 
-### Force HTTPS Redirect (Optional)
-
-To redirect all HTTP portal traffic to HTTPS, add this to your HTTP virtual host (`*:81`):
-
-```apache
-RewriteEngine On
-RewriteCond %{HTTPS} off
-RewriteRule (.*) https://%{SERVER_NAME}:446/$1 [R,L]
-```
+> Replace `YOUR_SERVER_HOSTNAME` and `YOUR_DOMAIN` throughout.
 
 ---
 
-## 8. Set Up the Cron Job
-
-The firewall script must run every minute to pick up newly whitelisted IPs from the database and apply them to `firewalld`.
+## Step 4 — Open firewall ports
 
 ```bash
-sudo crontab -e
+firewall-cmd --permanent --add-port=446/tcp
+firewall-cmd --permanent --add-port=81/tcp
+firewall-cmd --reload
+
+# Verify
+firewall-cmd --list-ports | grep -E "81|446"
 ```
-
-Add these two lines:
-
-```cron
-@reboot /usr/bin/VB-firewall --white --dynamic --quiet
-* * * * * /usr/bin/VB-firewall --white --dynamic --quiet
-```
-
-> 📌 `--white` applies the static whitelist. `--dynamic` applies IPs submitted through the portal. Both should always be used together.
 
 ---
 
-## 9. Restart Services
+## Step 5 — Create the ViciWhite IP list in ViciDial
+
+1. Log into ViciDial Admin
+2. Go to **Admin → IP Lists**
+3. Create a new list with ID: `ViciWhite`
+4. Ensure the `VB-firewall` cron is configured to read this list (standard on VICIdial servers)
+
+---
+
+## Step 6 — Restart Apache
 
 ```bash
-sudo systemctl restart httpd
-sudo systemctl reload firewalld
-
-# Verify both are running cleanly
-sudo systemctl status httpd
-sudo systemctl status firewalld
+systemctl restart httpd
+systemctl status httpd
 ```
 
-Check the Apache error log if something doesn't start:
+---
 
+## Step 7 — Test
+
+Open a browser and go to:
+
+```
+https://YOUR_SERVER_HOSTNAME:446/
+```
+
+You should see the portal login page showing your public IP. Log in with any active ViciDial
+agent credentials. On success:
+
+- Your IP is inserted into `vicidial_ip_list_entries` (list: `ViciWhite`)
+- Within ~60 seconds, `VB-firewall` syncs it to the `dynamiclist` firewalld ipset
+- You are redirected to the ViciDial agent screen (or admin panel if user_level ≥ 9)
+
+Verify the IP was written:
+```sql
+SELECT * FROM vicidial_ip_list_entries WHERE ip_list_id = 'ViciWhite' ORDER BY entry_date DESC LIMIT 5;
+```
+
+Verify it hit the firewall:
 ```bash
-sudo tail -f /var/log/httpd/error_log
-sudo tail -f /var/log/httpd/dynportal-error.log
+ipset list dynamiclist | grep YOUR_IP
 ```
 
 ---
 
-## 10. Test the Portal
+## Troubleshooting
 
-Open a browser and navigate to:
-
-| Protocol | URL |
-|----------|-----|
-| HTTP     | `http://your-server-ip:81/valid8.php` |
-| HTTPS    | `https://your-server-hostname.com:446/valid8.php` |
-
-You should see the **Dynamic Portal login page**. Enter a valid ViciDial agent username and password. On success, the agent's IP is added to the whitelist and will be applied to `firewalld` within **~60 seconds** (next cron run).
-
-To immediately verify an IP was added:
-
-```bash
-sudo firewall-cmd --list-sources --zone=<your-dynamic-zone>
-```
-
----
-
-## 11. Agent Usage Instructions
-
-Share this with your remote agents:
-
----
-
-> ### 🖥️ How to Whitelist Your IP
->
-> If you're working from home or your IP has changed and you can't connect to the ViciDial system:
->
-> 1. Open a browser and go to: `https://your-server-hostname.com:446/valid8.php`
-> 2. Enter your **ViciDial username and password**
-> 3. Click **Submit / Validate**
-> 4. Wait **up to 60 seconds**, then try connecting to ViciDial again
->
-> ✅ Your current IP will be whitelisted automatically.  
-> 🔁 If your IP changes again, simply repeat these steps.
-
----
-
-## 12. Troubleshooting
-
-| Problem | Likely Cause | Fix |
-|---|---|---|
-| Portal page not loading | Port 81/446 not open | Run `firewall-cmd --add-port=81/tcp --permanent && firewall-cmd --reload` |
-| "Login failed" on valid credentials | `$PORTAL_userlevel` too high | Set `$PORTAL_userlevel = 1` in `defaults.inc.php` |
-| IP not being whitelisted after login | Cron job not set up | Check `crontab -l` and ensure the `VB-firewall` cron entry exists |
-| SSL cert not trusted in browser | Self-signed or misconfigured cert | Use Let's Encrypt via certbot |
-| Apache won't start on port 446 | `Listen 446` missing from SSL config | Add `Listen 446` to `/etc/httpd/conf.d/ssl.conf` |
-| `/inc` directory accessible | VHost config missing deny rule | Add `<Directory ".../inc"> Require all denied </Directory>` |
-| Portal works but ViciDial still blocked | Firewalld zone misconfigured | Verify ipsets with `firewall-cmd --get-ipsets` and check zone assignment |
-
----
-
-> 💡 **Security tip:** Consider changing the portal from port 446 to a random high port (e.g. `51234`) for security through obscurity. Update `httpd.conf`, `ssl.conf`, `dynportal-ssl.conf`, and the firewall rule accordingly, then restart both services.
+| Problem | Fix |
+|---------|-----|
+| "Bad Request" on port 446 | Browser sent HTTP to HTTPS port — ensure port 81 redirect is in place and port 81/tcp is open in firewalld |
+| Portal not loading | Verify `ss -tlnp \| grep -E "81\|446"` and that firewall ports are open |
+| Login fails on valid credentials | Check `vicidial_users` has `active='Y'`; check `/etc/astguiclient.conf` is readable by `apache` user |
+| IP whitelisted but agent still blocked after 60s | Check `ipset list dynamiclist`; verify VB-firewall cron is running (`grep VB-firewall /var/log/cron`) |
+| `inc/` files served by Apache | Ensure `Require all denied` block is in the vhost for `/var/www/html/dynportal/inc` |
+| SSL cert errors | Use a valid Let's Encrypt cert — self-signed certs are rejected by browsers for mixed-content reasons |
