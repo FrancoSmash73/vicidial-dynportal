@@ -39,9 +39,16 @@ chown -R apache:apache /var/www/html/dynportal
 
 ## Step 2 — Configure the portal
 
+`defaults.inc.php` is excluded from git (via `.gitignore`) so it is never overwritten by future
+`git pull` updates. Copy the included template and edit it for your server:
+
 ```bash
-vi /var/www/html/dynportal/inc/defaults.inc.php
+cd /var/www/html/dynportal/inc
+cp defaults.inc.php.example defaults.inc.php
+vi defaults.inc.php
 ```
+
+Replace `YOUR_SERVER_HOSTNAME` with your server's actual hostname or domain:
 
 ```php
 <?php
@@ -62,7 +69,8 @@ $admin_level = 9;
 $portal_title = 'ViciDial Agent Portal';
 ```
 
-> **No DB credentials needed.** `dbconnect.inc.php` auto-reads them from `/etc/astguiclient.conf`.
+> **No DB credentials needed.** `dbconnect.inc.php` auto-reads them from `/etc/astguiclient.conf`.  
+> **Future `git pull` updates will never overwrite your `defaults.inc.php`.**
 
 ---
 
