@@ -76,6 +76,13 @@ cp "${SCRIPT_DIR}/firewalld/services/rtp.xml" /etc/firewalld/services/
 mkdir -p /etc/firewalld/ipsets
 cp "${SCRIPT_DIR}/firewalld/ipsets/dynamiclist.xml" /etc/firewalld/ipsets/
 
+# Reload now so firewalld actually knows about the viciportal-ssl/asterisk/rtp
+# services and the dynamiclist ipset BEFORE step 7 references them in
+# --add-rich-rule. Without this, those rich-rule calls fail silently (masked
+# by their own "|| true") because the custom service/ipset names don't exist
+# yet from firewalld's point of view.
+firewall-cmd --reload
+
 # 3. Apache vhost (generate from domain, not hardcoded)
 echo "Installing Apache vhost..."
 cat > /etc/httpd/conf.d/dynportal-ssl.conf <<VHOST
@@ -107,6 +114,17 @@ Listen 446 https
     ErrorLog logs/dynportal_ssl_error_log
     TransferLog logs/dynportal_ssl_access_log
     LogLevel warn
+</VirtualHost>
+
+# HTTP on port 81 -> redirect to HTTPS:446
+# (firewalld opens 81/tcp below; without this listener/vhost, a browser or
+# stray link hitting port 81 gets connection-refused instead of a redirect)
+Listen 81
+
+<VirtualHost _default_:81>
+    ServerName ${DOMAIN}
+    RewriteEngine On
+    RewriteRule ^/?(.*) https://${DOMAIN}:446/\$1 [R=301,L]
 </VirtualHost>
 VHOST
 
@@ -140,6 +158,9 @@ mysql -h "$DB_HOST" -P "$DB_PORT" -u "$DB_USER" -p"$DB_PASS" "$DB_NAME" -e \
 
 # 7. Firewall rules (permanent + reload)
 echo "Applying firewall rules..."
+# Port 81/tcp: the HTTP->HTTPS redirect vhost (dynportal-ssl.conf) listens
+# here; without this the firewall drops it even though Apache is listening.
+firewall-cmd --permanent --add-port=81/tcp 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" service name="viciportal-ssl" accept' 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source ipset="dynamiclist" service name="asterisk" accept' 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source ipset="dynamiclist" service name="rtp" accept' 2>/dev/null || true
@@ -179,4 +200,6 @@ echo ""
 echo "=== Installation complete ==="
 echo "Portal URL: https://${DOMAIN}:446/valid8.php"
 echo "Cron: VB-firewall runs every minute to sync IPs"
-[[ -n "$CARRIER_IP" ]] && echo "Carrier IP ${CARRIER_IP} permanently whitelisted for SIP/RTP"
+if [[ -n "$CARRIER_IP" ]]; then
+    echo "Carrier IP ${CARRIER_IP} permanently whitelisted for SIP/RTP"
+fi
