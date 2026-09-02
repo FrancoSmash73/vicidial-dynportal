@@ -98,3 +98,39 @@ if [[ $CHANGED -eq 1 ]]; then
 fi
 
 log "Sync complete. IPs in $IPSET_NAME: $(firewall-cmd --ipset="$IPSET_NAME" --get-entries 2>/dev/null | wc -w)"
+
+# Replicate ViciWhite IPs to a public VPS's SIP allowlist (inet sip-allowlist /
+# allowed_sip). OPTIONAL — only relevant for a ViciDial server that sits behind
+# CGNAT and relays SIP through a public VPS (see SIP-ALLOWLIST.md). Without it,
+# on such a setup, brute-force attackers reach Asterisk through the VPS DNAT
+# because the VPS's SNAT masks every public source as one IP, so the local
+# ipset above can't distinguish agents from attackers.
+#
+# Most vicidial-dynportal installs do NOT need this and can ignore it: the
+# push only runs if /etc/vicidial-dynportal-vps-relay.conf exists and sets
+# VPS_HOST (see that file's header comment for an example).
+# Best-effort: SSH or VPS unreachable must not break the local sync.
+VPS_RELAY_CONF="/etc/vicidial-dynportal-vps-relay.conf"
+[[ -f "$VPS_RELAY_CONF" ]] && source "$VPS_RELAY_CONF"
+push_to_vps() {
+    local ips="$1"
+    local elements
+    # Filter to IPv4 dotted-quad only — VPS DNAT and the allowlist set are IPv4.
+    elements=$(printf '%s\n' "$ips" \
+        | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' \
+        | awk '{printf "%s timeout 24h, ", $1}' | sed 's/, $//')
+    if [[ -z "$elements" ]]; then
+        # No agents: clear the dynamic set so a freshly-deauthorized agent
+        # is rejected on next REGISTER instead of waiting for timeout.
+        ssh -p "$VPS_PORT" -o ConnectTimeout=5 -o BatchMode=yes \
+            root@"$VPS_HOST" "nft flush set inet sip-allowlist allowed_sip" \
+            >/dev/null 2>&1 || log "VPS push: ssh/flush failed (non-fatal)"
+        return
+    fi
+    ssh -p "$VPS_PORT" -o ConnectTimeout=5 -o BatchMode=yes \
+        root@"$VPS_HOST" "nft -f -" >/dev/null 2>&1 <<EOF || log "VPS push: ssh/nft failed (non-fatal)"
+flush set inet sip-allowlist allowed_sip
+add element inet sip-allowlist allowed_sip { $elements }
+EOF
+}
+[[ -n "$VPS_HOST" ]] && push_to_vps "$DB_IPS"

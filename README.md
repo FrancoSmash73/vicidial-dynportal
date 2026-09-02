@@ -194,6 +194,19 @@ that list into the `dynamiclist` firewalld ipset:
 IPs are active within **~60 seconds** of login. When an agent re-authenticates, `entry_date`
 is refreshed (audit trail). VB-firewall handles expiry of stale entries.
 
+### Optional: relaying the allowlist to a public VPS (CGNAT setups only)
+
+`bin/VB-firewall` also carries an **optional** block that replicates the `ViciWhite` IPs to
+a public VPS's own SIP allowlist. This only applies if your ViciDial server sits behind
+CGNAT and relays SIP through a VPS (e.g. via WireGuard + DNAT) — most installs are directly
+reachable and don't need this at all.
+
+The block is inert by default: it only runs if `/etc/vicidial-dynportal-vps-relay.conf`
+exists and sets `VPS_HOST`. If that file is absent (the normal case), VB-firewall skips it
+entirely — no SSH attempt, no log noise. See the comment above `push_to_vps()` in the
+script for the mechanism, and `SIP-ALLOWLIST.md` (deployment-specific, not part of this
+repo) for the VPS-side nftables setup it expects.
+
 ---
 
 ## 🐛 Troubleshooting
