@@ -16,18 +16,34 @@ $success = '';
 $redirect_url = '';
 $client_ip = '';
 
-// Determine client IP (support proxies)
+// Determine client IPv4. The VPS sip-allowlist is IPv4-only, so we must
+// record an IPv4 even when the browser reached us over IPv6.
+// Priority: form-submitted client_ipv4 (set client-side via api4.ipify.org)
+// > CF-Connecting-IP > X-Forwarded-For > X-Real-IP > REMOTE_ADDR.
+$candidate_ips = [];
+if (!empty($_POST['client_ipv4'])) {
+    $candidate_ips[] = trim($_POST['client_ipv4']);
+}
+if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
+    $candidate_ips[] = trim($_SERVER['HTTP_CF_CONNECTING_IP']);
+}
 if (!empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-    $client_ip = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0]);
-} elseif (!empty($_SERVER['HTTP_X_REAL_IP'])) {
-    $client_ip = trim($_SERVER['HTTP_X_REAL_IP']);
-} else {
-    $client_ip = $_SERVER['REMOTE_ADDR'];
+    $candidate_ips[] = trim(explode(',', $_SERVER['HTTP_X_FORWARDED_FOR'])[0]);
+}
+if (!empty($_SERVER['HTTP_X_REAL_IP'])) {
+    $candidate_ips[] = trim($_SERVER['HTTP_X_REAL_IP']);
+}
+$candidate_ips[] = $_SERVER['REMOTE_ADDR'];
+
+foreach ($candidate_ips as $candidate) {
+    if (filter_var($candidate, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+        $client_ip = $candidate;
+        break;
+    }
 }
 
-// Validate IP format
-if (!filter_var($client_ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
-    $error = 'Unable to determine your IPv4 address.';
+if (empty($client_ip) && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    $error = 'Unable to determine your public IPv4 address. If your browser is using IPv6 only, this page will detect IPv4 in a moment — please wait, then retry.';
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
@@ -110,7 +126,7 @@ mysqli_close($link);
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: #1a1a2e;
+            background: #14231e;
             color: #e0e0e0;
             display: flex;
             justify-content: center;
@@ -118,7 +134,7 @@ mysqli_close($link);
             min-height: 100vh;
         }
         .container {
-            background: #16213e;
+            background: #203731;
             padding: 2rem;
             border-radius: 8px;
             width: 100%;
@@ -129,45 +145,46 @@ mysqli_close($link);
             text-align: center;
             margin-bottom: 0.5rem;
             font-size: 1.4rem;
-            color: #4fc3f7;
+            color: #FFB612;
         }
         .ip-display {
             text-align: center;
             font-size: 0.85rem;
-            color: #90a4ae;
+            color: #9cb0a8;
             margin-bottom: 1.5rem;
         }
         label {
             display: block;
             margin-bottom: 0.3rem;
             font-size: 0.9rem;
-            color: #b0bec5;
+            color: #c8d2cd;
         }
         input[type="text"], input[type="password"] {
             width: 100%;
             padding: 0.6rem;
             margin-bottom: 1rem;
-            border: 1px solid #37474f;
+            border: 1px solid #3a5a50;
             border-radius: 4px;
-            background: #0d1b2a;
+            background: #14231e;
             color: #e0e0e0;
             font-size: 1rem;
         }
         input:focus {
             outline: none;
-            border-color: #4fc3f7;
+            border-color: #FFB612;
         }
         button {
             width: 100%;
             padding: 0.7rem;
-            background: #0277bd;
-            color: #fff;
+            background: #FFB612;
+            color: #203731;
             border: none;
             border-radius: 4px;
             font-size: 1rem;
+            font-weight: 700;
             cursor: pointer;
         }
-        button:hover { background: #0288d1; }
+        button:hover { background: #FFD35C; }
         .error {
             background: #b71c1c;
             color: #fff;
@@ -199,18 +216,44 @@ mysqli_close($link);
 
         <?php if ($success): ?>
             <div class="success"><?php echo htmlspecialchars($success); ?></div>
-            <p style="text-align:center; font-size:0.85rem; color:#90a4ae; margin-top:0.5rem;">Redirecting in 3 seconds... <a href="<?php echo htmlspecialchars($redirect_url); ?>" style="color:#4fc3f7;">Click here</a> if not redirected.</p>
+            <p style="text-align:center; font-size:0.85rem; color:#9cb0a8; margin-top:0.5rem;">Redirecting in 3 seconds... <a href="<?php echo htmlspecialchars($redirect_url); ?>" style="color:#FFB612;">Click here</a> if not redirected.</p>
             <script>setTimeout(function(){ window.location.href = "<?php echo htmlspecialchars($redirect_url, ENT_QUOTES); ?>"; }, 3000);</script>
         <?php else: ?>
-            <form method="POST" action="">
+            <form method="POST" action="" id="loginForm">
+                <input type="hidden" id="client_ipv4" name="client_ipv4" value="">
+
                 <label for="user">Username</label>
                 <input type="text" id="user" name="user" autocomplete="username" required>
 
                 <label for="pass">Password</label>
                 <input type="password" id="pass" name="pass" autocomplete="current-password" required>
 
-                <button type="submit">Login &amp; Whitelist IP</button>
+                <button type="submit" id="submitBtn" disabled>Detecting your IPv4&hellip;</button>
             </form>
+            <script>
+            (function () {
+                var btn = document.getElementById('submitBtn');
+                var hidden = document.getElementById('client_ipv4');
+                var display = document.querySelector('.ip-display');
+                fetch('https://api4.ipify.org/?format=json', { cache: 'no-store' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (data) {
+                        if (data && /^\d{1,3}(\.\d{1,3}){3}$/.test(data.ip)) {
+                            hidden.value = data.ip;
+                            if (display) { display.textContent = 'Your public IPv4: ' + data.ip; }
+                            btn.disabled = false;
+                            btn.textContent = 'Login & Whitelist IP';
+                        } else {
+                            btn.textContent = 'Could not detect IPv4 — retry';
+                        }
+                    })
+                    .catch(function () {
+                        // Allow submission anyway; server will fall back to REMOTE_ADDR.
+                        btn.disabled = false;
+                        btn.textContent = 'Login & Whitelist IP (IPv4 detection unavailable)';
+                    });
+            })();
+            </script>
         <?php endif; ?>
     </div>
 </body>
